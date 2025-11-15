@@ -150,16 +150,53 @@ def build_dom_tree(element, parent_node_id, page_name, depth=0):
             # Page → Page link edge
             G.add_edge(node_id, target, relation="LINKS_TO_PAGE", anchor=link_txt)
 
-        elif re.match(r"^(mailto:|tel:|http)", href):
-            # External target as data node
+
+        elif re.match(r"^(http|https)", href):
+
+            # External web page (not email/phone)
+
+            external_node_id = href  # use full URL as node ID to merge duplicates
+
+            # Create the external page node if not present
+
+            if external_node_id not in G:
+                G.add_node(
+
+                    external_node_id,
+
+                    type="External_Page",
+
+                    url=href,
+
+                    label=link_txt,
+
+                    hostname=re.sub(r"^https?://", "", href).split("/")[0]  # domain
+
+                )
+
+            G.add_edge(node_id, external_node_id, relation="LINKS_TO_EXTERNAL_PAGE", anchor=link_txt)
+
+
+        elif re.match(r"^(mailto:|tel:)", href):
+
+            # Non-page external target (email, phone)
+
             data_node_id = f"{page_name}_DATA_{len(G.nodes)}"
+
             G.add_node(
+
                 data_node_id,
+
                 type="Data_Link",
+
                 data_type=href.split(":")[0],
+
                 value=href,
+
                 label=link_txt
+
             )
+
             G.add_edge(node_id, data_node_id, relation="CONTAINS_DATA", anchor=link_txt)
 
     # -----------------------------
