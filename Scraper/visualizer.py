@@ -4,7 +4,7 @@ from pyvis.network import Network
 
 
 # ============================================================
-# 1. LOAD GRAPH
+# LOAD GRAPH
 # ============================================================
 
 GRAPH_FILE = "dom_graph.json"
@@ -12,66 +12,96 @@ GRAPH_FILE = "dom_graph.json"
 with open(GRAPH_FILE, "r", encoding="utf-8") as f:
     graph_data = json.load(f)
 
-G = nx.node_link_graph(graph_data)
-
-print("Loaded graph:")
-print("  Nodes:", len(G.nodes))
-print("  Edges:", len(G.edges))
+# Explicitly set edges="links" to match nx.node_link_data default
+G = nx.node_link_graph(graph_data, edges="links")
 
 
 # ============================================================
-# 2. COLOR SETTINGS
+# COLOR MAP
 # ============================================================
 
 COLOR_MAP = {
-    "Page_File": "#ffcc00",       # yellow
-    "DOM_Element": "#66b3ff",     # blue
-    "Section_Heading": "#009933", # green
-    "Paragraph": "#3366cc",       # darker blue
-    "Data_Link": "#ff6666",       # red
+    "Page_File":     "#ffcc00",
+    "External_Page": "#ff9900",
+    "DOM_Element":   "#66b3ff",
+    "Section_Heading": "#009933",
+    "Paragraph":     "#3366cc",
+    "Data_Link":     "#ff6666",
 }
 
-
 def get_node_color(node):
-    data = G.nodes[node]
+    t = G.nodes[node].get("type", "")
+    return COLOR_MAP.get(t, "#cccccc")
 
-    node_type = data.get("type", "DOM_Element")
-    return COLOR_MAP.get(node_type, "#cccccc")  # default gray
 
+# ============================================================
+# NODE LABELS
+# ============================================================
 
 def get_node_label(node):
-    """Readable labels for visualization."""
     data = G.nodes[node]
     t = data.get("type", "")
 
     if t == "Page_File":
-        return f"📄 {data.get('title', node)}"
+        return "📄 " + data.get("title", node)
+
+    if t == "External_Page":
+        # Show hostname or label or URL
+        hostname = data.get("hostname")
+        url = data.get("url", node)
+        label = data.get("label") or hostname or url
+        return "🌐 " + label
+
+    if t == "Paragraph":
+        return "P: " + data.get("text_snippet", "")[:40] + "..."
 
     if t in ["Section_Heading", "Page_Title"]:
         return data.get("heading_text") or data.get("title_text") or node
 
-    if t == "Paragraph":
-        txt = data.get("text_snippet", "")
-        return f"P: {txt[:40]}..."
-
     if t == "Data_Link":
-        return f"🔗 {data.get('value', '')}"
+        return "🔗 " + data.get("value", "")
 
-    # fallback: tag name
-    tag = data.get("tag", "")
-    return f"<{tag}> {node}"
+    # Fallback: generic tag
+    return f"<{data.get('tag', '')}> {node}"
 
 
 # ============================================================
-# 3. BUILD INTERACTIVE VISUALIZATION
+# NODE SIZE BASED ON TEXT CONTENT
+# ============================================================
+
+def get_node_size(node, k=0.2, base=10):
+    """Return a node size based on its text content length."""
+    data = G.nodes[node]
+    t = data.get("type", "")
+
+    if t == "Page_File":
+        return 50  # keep internal page nodes big
+    if t == "External_Page":
+        return 40  # external pages slightly smaller but still prominent
+
+    text_fields = [
+        data.get("full_text", ""),
+        data.get("heading_text", ""),
+        data.get("title_text", ""),
+        data.get("text_snippet", "")
+    ]
+
+    text = " ".join([txt for txt in text_fields if txt])
+    weight = len(text)
+
+    # Prevent absurdly tiny or huge nodes
+    return min(max(base + k * weight, 15), 120)
+
+
+# ============================================================
+# BUILD INTERACTIVE VISUALIZATION
 # ============================================================
 
 net = Network(
     height="900px",
     width="100%",
     directed=True,
-    bgcolor="#ffffff",
-    font_color="#000000"
+    notebook=False
 )
 
 net.barnes_hut(
@@ -79,10 +109,10 @@ net.barnes_hut(
     central_gravity=0.2,
     spring_length=170,
     spring_strength=0.01,
-    damping=0.95,
+    damping=0.95
 )
 
-# Add nodes with metadata
+# Add nodes
 for node, attrs in G.nodes(data=True):
     net.add_node(
         node,
@@ -90,21 +120,20 @@ for node, attrs in G.nodes(data=True):
         color=get_node_color(node),
         title=json.dumps(attrs, indent=2),
         shape="dot",
-        size=15 if attrs.get("type") != "Page_File" else 30
+        size=get_node_size(node)
     )
 
-# Add edges with tooltip showing relation
+# Add edges
 for u, v, attrs in G.edges(data=True):
     rel = attrs.get("relation", "")
     net.add_edge(u, v, title=rel, label=rel)
 
 
 # ============================================================
-# 4. GENERATE HTML VISUALIZATION
+# OUTPUT
 # ============================================================
 
 OUTPUT_FILE = "dom_graph_visualization.html"
 net.write_html(OUTPUT_FILE)
 
-print(f"Interactive visualization saved to: {OUTPUT_FILE}")
-print("Open it in a browser to explore the DOM graph.")
+print(f"Interactive visualization saved: {OUTPUT_FILE}")
