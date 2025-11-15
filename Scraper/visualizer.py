@@ -1,58 +1,110 @@
-import networkx as nx
 import json
-import matplotlib.pyplot as plt
-
-# --- 1. Load Graph from JSON ---
-
-with open('website_graph.json', 'r') as f:
-    graph_json_string = f.read()
+import networkx as nx
+from pyvis.network import Network
 
 
-graph_data = json.loads(graph_json_string)
-G_loaded = nx.node_link_graph(graph_data)
+# ============================================================
+# 1. LOAD GRAPH
+# ============================================================
 
-# --- 2. Visualization ---
-plt.figure(figsize=(15, 10))
-pos = nx.spring_layout(G_loaded, k=0.1, iterations=50, seed=42)
+GRAPH_FILE = "dom_graph.json"
 
-# Separate nodes by type
-page_nodes = [n for n, data in G_loaded.nodes(data=True) if data.get('type') == 'Page']
-section_nodes = [n for n, data in G_loaded.nodes(data=True) if data.get('type') == 'Section']
-content_nodes = [n for n, data in G_loaded.nodes(data=True) if data.get('type') == 'Content']
-data_nodes = [n for n, data in G_loaded.nodes(data=True) if data.get('type') == 'Data']
+with open(GRAPH_FILE, "r", encoding="utf-8") as f:
+    graph_data = json.load(f)
 
-# Draw Nodes using the CORRECT FUNCTION: nx.draw_networkx_nodes
-nx.draw_networkx_nodes(G_loaded, pos, nodelist=page_nodes, node_color='#72A0C1', node_size=3000, label='Page', alpha=0.9, linewidths=2, edgecolors='#4682B4')
-nx.draw_networkx_nodes(G_loaded, pos, nodelist=section_nodes, node_color='#90EE90', node_size=1500, label='Section', alpha=0.9)
-nx.draw_networkx_nodes(G_loaded, pos, nodelist=content_nodes, node_color='#F08080', node_size=800, label='Content', alpha=0.7)
-nx.draw_networkx_nodes(G_loaded, pos, nodelist=data_nodes, node_color='#FFD700', node_size=500, label='Data', alpha=0.9)
+G = nx.node_link_graph(graph_data)
 
-# Draw Edges using the CORRECT FUNCTION: nx.draw_networkx_edges
-page_link_edges = [e for e in G_loaded.edges(data=True) if e[2].get('relation') == 'LINKS_TO_PAGE']
-structure_edges = [e for e in G_loaded.edges(data=True) if e[2].get('relation') == 'CONTAINS_SECTION']
-content_edges = [e for e in G_loaded.edges(data=True) if e[2].get('relation') == 'HAS_CONTENT']
-data_edges = [e for e in G_loaded.edges(data=True) if e[2].get('relation') == 'CONTAINS_DATA']
+print("Loaded graph:")
+print("  Nodes:", len(G.nodes))
+print("  Edges:", len(G.edges))
 
-nx.draw_networkx_edges(G_loaded, pos, edgelist=page_link_edges, edge_color='#4682B4', style='solid', width=2.0, arrowsize=25)
-nx.draw_networkx_edges(G_loaded, pos, edgelist=structure_edges, edge_color='gray', style='dashed', width=0.8, arrowsize=10)
-nx.draw_networkx_edges(G_loaded, pos, edgelist=content_edges, edge_color='#F08080', style='dotted', width=1.0, arrowsize=10)
-nx.draw_networkx_edges(G_loaded, pos, edgelist=data_edges, edge_color='#FFD700', style='solid', width=1.0, arrowsize=15)
 
-# Create Node Labels
-labels = {}
-for node in G_loaded.nodes():
-    data = G_loaded.nodes[node]
-    label = data.get('title') or data.get('text') or data.get('label') or node
-    if data.get('type') == 'Page':
-        labels[node] = node
-    else:
-        labels[node] = label.replace("The nicest Spice Wreath...", "Blog Post").split(':')[0][:25] + "..." if len(label) > 25 else label
+# ============================================================
+# 2. COLOR SETTINGS
+# ============================================================
 
-# Draw Labels using the CORRECT FUNCTION: nx.draw_networkx_labels
-nx.draw_networkx_labels(G_loaded, pos, labels=labels, font_size=8, font_color='black')
+COLOR_MAP = {
+    "Page_File": "#ffcc00",       # yellow
+    "DOM_Element": "#66b3ff",     # blue
+    "Section_Heading": "#009933", # green
+    "Paragraph": "#3366cc",       # darker blue
+    "Data_Link": "#ff6666",       # red
+}
 
-plt.title("Graph RAG DOM Structure Visualization", size=15)
-plt.legend(scatterpoints=1, title="Node Types")
-plt.axis('off')
-plt.savefig('dom_graph_visualization.png')
-print("Visualization saved to dom_graph_visualization.png")
+
+def get_node_color(node):
+    data = G.nodes[node]
+
+    node_type = data.get("type", "DOM_Element")
+    return COLOR_MAP.get(node_type, "#cccccc")  # default gray
+
+
+def get_node_label(node):
+    """Readable labels for visualization."""
+    data = G.nodes[node]
+    t = data.get("type", "")
+
+    if t == "Page_File":
+        return f"📄 {data.get('title', node)}"
+
+    if t in ["Section_Heading", "Page_Title"]:
+        return data.get("heading_text") or data.get("title_text") or node
+
+    if t == "Paragraph":
+        txt = data.get("text_snippet", "")
+        return f"P: {txt[:40]}..."
+
+    if t == "Data_Link":
+        return f"🔗 {data.get('value', '')}"
+
+    # fallback: tag name
+    tag = data.get("tag", "")
+    return f"<{tag}> {node}"
+
+
+# ============================================================
+# 3. BUILD INTERACTIVE VISUALIZATION
+# ============================================================
+
+net = Network(
+    height="900px",
+    width="100%",
+    directed=True,
+    bgcolor="#ffffff",
+    font_color="#000000"
+)
+
+net.barnes_hut(
+    gravity=-20000,
+    central_gravity=0.2,
+    spring_length=170,
+    spring_strength=0.01,
+    damping=0.95,
+)
+
+# Add nodes with metadata
+for node, attrs in G.nodes(data=True):
+    net.add_node(
+        node,
+        label=get_node_label(node),
+        color=get_node_color(node),
+        title=json.dumps(attrs, indent=2),
+        shape="dot",
+        size=15 if attrs.get("type") != "Page_File" else 30
+    )
+
+# Add edges with tooltip showing relation
+for u, v, attrs in G.edges(data=True):
+    rel = attrs.get("relation", "")
+    net.add_edge(u, v, title=rel, label=rel)
+
+
+# ============================================================
+# 4. GENERATE HTML VISUALIZATION
+# ============================================================
+
+OUTPUT_FILE = "dom_graph_visualization.html"
+net.write_html(OUTPUT_FILE)
+
+print(f"Interactive visualization saved to: {OUTPUT_FILE}")
+print("Open it in a browser to explore the DOM graph.")
