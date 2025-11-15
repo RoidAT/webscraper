@@ -12,7 +12,8 @@ GRAPH_FILE = "dom_graph.json"
 with open(GRAPH_FILE, "r", encoding="utf-8") as f:
     graph_data = json.load(f)
 
-G = nx.node_link_graph(graph_data)
+# Explicitly set edges="links" to match nx.node_link_data default
+G = nx.node_link_graph(graph_data, edges="links")
 
 
 # ============================================================
@@ -20,11 +21,12 @@ G = nx.node_link_graph(graph_data)
 # ============================================================
 
 COLOR_MAP = {
-    "Page_File": "#ffcc00",
-    "DOM_Element": "#66b3ff",
+    "Page_File":     "#ffcc00",
+    "External_Page": "#ff9900",
+    "DOM_Element":   "#66b3ff",
     "Section_Heading": "#009933",
-    "Paragraph": "#3366cc",
-    "Data_Link": "#ff6666",
+    "Paragraph":     "#3366cc",
+    "Data_Link":     "#ff6666",
 }
 
 def get_node_color(node):
@@ -43,6 +45,13 @@ def get_node_label(node):
     if t == "Page_File":
         return "📄 " + data.get("title", node)
 
+    if t == "External_Page":
+        # Show hostname or label or URL
+        hostname = data.get("hostname")
+        url = data.get("url", node)
+        label = data.get("label") or hostname or url
+        return "🌐 " + label
+
     if t == "Paragraph":
         return "P: " + data.get("text_snippet", "")[:40] + "..."
 
@@ -52,6 +61,7 @@ def get_node_label(node):
     if t == "Data_Link":
         return "🔗 " + data.get("value", "")
 
+    # Fallback: generic tag
     return f"<{data.get('tag', '')}> {node}"
 
 
@@ -65,7 +75,9 @@ def get_node_size(node, k=0.2, base=10):
     t = data.get("type", "")
 
     if t == "Page_File":
-        return 50  # keep page nodes big
+        return 50  # keep internal page nodes big
+    if t == "External_Page":
+        return 40  # external pages slightly smaller but still prominent
 
     text_fields = [
         data.get("full_text", ""),
@@ -74,7 +86,7 @@ def get_node_size(node, k=0.2, base=10):
         data.get("text_snippet", "")
     ]
 
-    text = " ".join([t for t in text_fields if t])
+    text = " ".join([txt for txt in text_fields if txt])
     weight = len(text)
 
     # Prevent absurdly tiny or huge nodes
