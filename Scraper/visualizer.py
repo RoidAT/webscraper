@@ -21,12 +21,13 @@ G = nx.node_link_graph(graph_data, edges="links")
 # ============================================================
 
 COLOR_MAP = {
-    "Page_File":     "#ffcc00",
-    "External_Page": "#ff9900",
-    "DOM_Element":   "#66b3ff",
+    "Page_File":       "#ffcc00",
+    "External_Page":   "#ff9900",
+    "PAGE_ROOT":       "#00cccc",   # ← NEW: page DOM roots
+    "DOM_Element":     "#66b3ff",
     "Section_Heading": "#009933",
-    "Paragraph":     "#3366cc",
-    "Data_Link":     "#ff6666",
+    "Paragraph":       "#3366cc",
+    "Data_Link":       "#ff6666",
 }
 
 def get_node_color(node):
@@ -52,6 +53,14 @@ def get_node_label(node):
         label = data.get("label") or hostname or url
         return "🌐 " + label
 
+    if t == "PAGE_ROOT":
+        # Show that this is the DOM root for a page
+        page = data.get("page", "")
+        tag = data.get("tag", "")
+        if page:
+            return f"🏠 ROOT {page} <{tag}>"
+        return f"🏠 ROOT <{tag}>"
+
     if t == "Paragraph":
         return "P: " + data.get("text_snippet", "")[:40] + "..."
 
@@ -76,6 +85,8 @@ def get_node_size(node, k=0.2, base=10):
 
     if t == "Page_File":
         return 50  # keep internal page nodes big
+    if t == "PAGE_ROOT":
+        return 45  # root of DOM tree, slightly smaller than page file
     if t == "External_Page":
         return 40  # external pages slightly smaller but still prominent
 

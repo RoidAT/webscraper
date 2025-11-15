@@ -10,7 +10,6 @@ from bs4 import BeautifulSoup, Tag
 # ============================================================
 
 ROOT_DIR = "../StaticTestWebsite"     # ← change as needed
-START_PAGE = ROOT_DIR + "/index.html"
 
 file_contents = {}
 
@@ -109,17 +108,19 @@ def build_dom_tree(element, parent_node_id, page_name, depth=0):
     node_id = get_node_id(page_name, element)
 
     text_content = clean_text(element.get_text())
+    is_root = (depth == 0)  # this is the DOM root for this page
 
+    # Base attributes
     node_attrs = {
-        "type": "DOM_Element",
+        "type": "PAGE_ROOT" if is_root else "DOM_Element",
         "tag": element.name,
-        "xpath": get_simple_xpath(element),
-        "page": page_name,
-        "depth": depth,
-        "text_snippet": text_content[:150]
     }
 
-    # Tag-specific node types
+    # Only the DOM root keeps page information
+    if is_root:
+        node_attrs["page"] = page_name
+
+    # Tag-specific node types (these can override the type for non-root nodes)
     if element.name == "title":
         node_attrs["type"] = "Page_Title"
         node_attrs["title_text"] = text_content
@@ -150,51 +151,32 @@ def build_dom_tree(element, parent_node_id, page_name, depth=0):
             # Page → Page link edge
             G.add_edge(node_id, target, relation="LINKS_TO_PAGE", anchor=link_txt)
 
-
         elif re.match(r"^(http|https)", href):
-
             # External web page (not email/phone)
-
             external_node_id = href  # use full URL as node ID to merge duplicates
 
             # Create the external page node if not present
-
             if external_node_id not in G:
                 G.add_node(
-
                     external_node_id,
-
                     type="External_Page",
-
                     url=href,
-
                     label=link_txt,
-
-                    hostname=re.sub(r"^https?://", "", href).split("/")[0]  # domain
-
+                    hostname=re.sub(r"^https?://", "", href).split("/")[0],
                 )
 
             G.add_edge(node_id, external_node_id, relation="LINKS_TO_EXTERNAL_PAGE", anchor=link_txt)
 
-
         elif re.match(r"^(mailto:|tel:)", href):
-
             # Non-page external target (email, phone)
-
             data_node_id = f"{page_name}_DATA_{len(G.nodes)}"
 
             G.add_node(
-
                 data_node_id,
-
                 type="Data_Link",
-
                 data_type=href.split(":")[0],
-
                 value=href,
-
-                label=link_txt
-
+                label=link_txt,
             )
 
             G.add_edge(node_id, data_node_id, relation="CONTAINS_DATA", anchor=link_txt)
@@ -205,6 +187,7 @@ def build_dom_tree(element, parent_node_id, page_name, depth=0):
     for child in element.children:
         if isinstance(child, Tag):
             build_dom_tree(child, node_id, page_name, depth + 1)
+
 
 
 # ============================================================
