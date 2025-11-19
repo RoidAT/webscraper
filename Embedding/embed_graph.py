@@ -5,7 +5,7 @@ import numpy as np
 import os
 
 
-GRAPH_FILE = "Scraper2/Output_Graph_Json/dom_graph.json"
+GRAPH_FILE = "Scraper/Output_Graph_Json/dom_graph.json"
 OUTPUT_EMBEDDINGS = "Embedding/Output_Embeddings/node_embeddings.json"
 
 # model = SentenceTransformer("intfloat/e5-large-v2")   # extrem stark, kostenlos

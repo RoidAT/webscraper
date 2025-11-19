@@ -314,31 +314,3 @@ def rag_query(query: str, top_k: int = 5):
             }
         )
     return results
-
-
-# ============================================================
-# DEMO / SANITY CHECK
-# ============================================================
-
-if __name__ == "__main__":
-    print("\n===== Simple RAG demo =====")
-    user_query = input("Enter a query (or leave empty to skip): ").strip()
-
-    if user_query:
-        matches = rag_query(user_query, top_k=5)
-
-        print(f"\nTop {len(matches)} matching nodes:\n")
-        for i, m in enumerate(matches, start=1):
-            print(f"#{i}")
-            print(f"Node ID: {m['node_id']}")
-            print(f"Score:   {m['score']:.4f}")
-            print("Text:")
-            print(m["text"])
-            print("-" * 80)
-
-        # Also just print the node_ids as requested
-        print("\nBest matching node_ids:")
-        for m in matches:
-            print(m["node_id"])
-    else:
-        print("No query entered; skipping RAG demo.")

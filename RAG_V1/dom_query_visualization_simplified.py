@@ -1,0 +1,291 @@
+# dom_query_visualization.py
+
+import json
+import numpy as np
+import networkx as nx
+from pyvis.network import Network
+from sentence_transformers import SentenceTransformer
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+GRAPH_FILE = "dom_graph.json"
+INDEX_FILE = "dom_embeddings.json"
+OUTPUT_FILE = "dom_graph_query_visualization_simplified.html"
+TOP_K = 10  # how many best matches to highlight
+
+
+# ============================================================
+# LOAD GRAPH
+# ============================================================
+
+with open(GRAPH_FILE, "r", encoding="utf-8") as f:
+    graph_data = json.load(f)
+
+G = nx.node_link_graph(graph_data, edges="links")
+
+
+# ============================================================
+# COLOR MAP
+# ============================================================
+
+COLOR_MAP = {
+    "Page_File":       "#ffcc00",
+    "External_Page":   "#ff9900",
+    "PAGE_ROOT":       "#00cccc",   # page DOM roots
+    "DOM_Element":     "#66b3ff",
+    "Section_Heading": "#009933",
+    "Paragraph":       "#3366cc",
+    "Data_Link":       "#ff6666",
+}
+
+def get_node_color(node):
+    t = G.nodes[node].get("type", "")
+    return COLOR_MAP.get(t, "#cccccc")
+
+
+# ============================================================
+# NODE LABELS
+# ============================================================
+
+def get_node_label(node):
+    data = G.nodes[node]
+    t = data.get("type", "")
+
+    if t == "Page_File":
+        return "📄 " + data.get("title", node)
+
+    if t == "External_Page":
+        hostname = data.get("hostname")
+        url = data.get("url", node)
+        label = data.get("label") or hostname or url
+        return "🌐 " + label
+
+    if t == "PAGE_ROOT":
+        page = data.get("page", "")
+        tag = data.get("tag", "")
+        if page:
+            return f"🏠 ROOT {page} <{tag}>"
+        return f"🏠 ROOT <{tag}>"
+
+    if t == "Paragraph":
+        txt = data.get("full_text", "")
+        return "P: " + (txt[:40] + "..." if txt else node)
+
+    if t in ["Section_Heading", "Page_Title"]:
+        return data.get("heading_text") or data.get("title_text") or node
+
+    if t == "Data_Link":
+        return "🔗 " + data.get("value", "")
+
+    return f"<{data.get('tag', '')}> {node}"
+
+
+# ============================================================
+# SIZE: BASE + BOOST FOR MATCHED NODES
+# ============================================================
+
+def get_node_size(node, match_scores=None):
+    data = G.nodes[node]
+    t = data.get("type", "")
+
+    if t == "Page_File":
+        base_size = 40
+    elif t == "PAGE_ROOT":
+        base_size = 35
+    elif t == "External_Page":
+        base_size = 30
+    else:
+        base_size = 18
+
+    if match_scores and node in match_scores:
+        s = match_scores[node]
+        max_size = 80
+        size = base_size + s * (max_size - base_size)
+        return size
+
+    return base_size
+
+
+# ============================================================
+# LOAD EMBEDDING INDEX (PRECOMPUTED)
+# ============================================================
+
+def load_index(path=INDEX_FILE):
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    ids = [d["id"] for d in data]
+    texts = [d["text"] for d in data]
+    metas = [d["metadata"] for d in data]
+    embs = np.array([d["embedding"] for d in data], dtype="float32")
+
+    return ids, texts, metas, embs
+
+
+# ============================================================
+# LOCAL EMBEDDING MODEL (for queries only)
+# ============================================================
+
+embedding_model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+def embed_query(text: str):
+    emb = embedding_model.encode(
+        [text],
+        normalize_embeddings=True,
+        show_progress_bar=False
+    )
+    return emb[0]
+
+
+# ============================================================
+# RAG RETRIEVAL (USING PRECOMPUTED INDEX)
+# ============================================================
+
+def find_best_matches(query: str, top_k: int = TOP_K):
+    """
+    Returns:
+      - matches: list of dicts {node_id, score, norm_score, text, metadata, rank}
+      - scores_dict: {node_id -> normalized_score in [0, 1]}
+    """
+    ids, texts, metas, embs = load_index()
+
+    q_emb = embed_query(query)
+    sims = embs @ q_emb  # cosine similarity, embeddings are normalized
+
+    top_indices = np.argsort(-sims)[:top_k]
+
+    raw_scores = [float(sims[i]) for i in top_indices]
+    min_s = min(raw_scores)
+    max_s = max(raw_scores)
+
+    if max_s - min_s < 1e-8:
+        norm_scores = [1.0 for _ in raw_scores]
+    else:
+        norm_scores = [(s - min_s) / (max_s - min_s) for s in raw_scores]
+
+    matches = []
+    scores_dict = {}
+    for rank, (idx, s, ns) in enumerate(zip(top_indices, raw_scores, norm_scores)):
+        node_id = ids[idx]
+        matches.append(
+            {
+                "node_id": node_id,
+                "score": s,
+                "norm_score": ns,
+                "text": texts[idx],
+                "metadata": metas[idx],
+                "rank": rank + 1,
+            }
+        )
+        scores_dict[node_id] = ns
+
+    return matches, scores_dict
+
+
+# ============================================================
+# FILTER GRAPH TO ONLY DIRECT LINES OF MATCHED NODES
+# ============================================================
+
+def build_filtered_graph(scores_dict):
+    """
+    Build a subgraph that contains ONLY:
+      - each matched node, and
+      - all of its ancestors (following predecessor links) up to the roots.
+
+    This removes siblings / other branches that are not on a path
+    leading to a matched node.
+    """
+    if not scores_dict:
+        # No matches -> return full graph to avoid empty viz
+        return G
+
+    matched_nodes = set(scores_dict.keys())
+    kept_nodes = set()
+
+    # For each matched node, walk "up" via predecessors
+    for start in matched_nodes:
+        stack = [start]
+        while stack:
+            n = stack.pop()
+            if n in kept_nodes:
+                continue
+            kept_nodes.add(n)
+            # go to parents (ancestors)
+            for parent in G.predecessors(n):
+                if parent not in kept_nodes:
+                    stack.append(parent)
+
+    # Induced subgraph on these nodes
+    H = G.subgraph(kept_nodes).copy()
+    return H
+
+
+# ============================================================
+# BUILD INTERACTIVE VISUALIZATION WITH HIGHLIGHTED MATCHES
+# ============================================================
+
+def visualize_query(query: str, top_k: int = TOP_K, output_file: str = OUTPUT_FILE):
+    print(f"\nRunning query: {query!r}")
+    matches, scores_dict = find_best_matches(query, top_k=top_k)
+
+    print(f"\nTop {len(matches)} matches:")
+    for m in matches:
+        print(f"\n#{m['rank']}  Node: {m['node_id']}")
+        print(f"Score: {m['score']:.4f} (norm: {m['norm_score']:.3f})")
+        print("Text snippet:")
+        print(m["text"][:400] + ("..." if len(m["text"]) > 400 else ""))
+        print("-" * 60)
+
+    print("\nCreating visualization...")
+
+    # Use filtered subgraph that only contains direct lines of matches
+    H = build_filtered_graph(scores_dict)
+
+    net = Network(
+        height="900px",
+        width="100%",
+        directed=True,
+        notebook=False
+    )
+
+    net.barnes_hut(
+        gravity=-20000,
+        central_gravity=0.2,
+        spring_length=170,
+        spring_strength=0.01,
+        damping=0.95
+    )
+
+    # Add nodes (from filtered graph)
+    for node, attrs in H.nodes(data=True):
+        net.add_node(
+            node,
+            label=get_node_label(node),
+            color=get_node_color(node),
+            title=json.dumps(attrs, indent=2),
+            shape="dot",
+            size=get_node_size(node, scores_dict),
+        )
+
+    # Add edges (from filtered graph)
+    for u, v, attrs in H.edges(data=True):
+        rel = attrs.get("relation", "")
+        net.add_edge(u, v, title=rel, label=rel)
+
+    net.write_html(output_file)
+    print(f"Interactive visualization saved: {output_file}")
+    print("Matched nodes are larger; better matches are biggest.")
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+if __name__ == "__main__":
+    user_query = input("Enter a query for visualization: ").strip()
+    if not user_query:
+        print("No query provided, aborting.")
+    else:
+        visualize_query(user_query, top_k=TOP_K, output_file=OUTPUT_FILE)
